@@ -461,9 +461,21 @@ async def on_voice(message: Message, db: Database, settings: Settings) -> None:
         categories=categories,
     )
 
-    if not parsed or not parsed.get("amount"):
-        await message.answer("🎙 Ovozli xabardan summa aniqlanmadi. Qayta urinib ko'ring yoki yozib kiriting.")
+    if not parsed:
+        await message.answer("🎙 Ovozli xabarni tushunib bo'lmadi. Qayta urinib ko'ring yoki matn ko'rinishida yozing.")
         return
+
+    transcript = parsed.get("transcript") or ""
+    amount = parsed.get("amount")
+
+    if not amount:
+        tr_msg = f"\n🗣 <i>Eshitildi: \"{transcript}\"</i>" if transcript else ""
+        await message.answer(
+            f"🎙 Ovozli xabardan summa aniqlanmadi.{tr_msg}\n"
+            f"💡 <b>Masalan:</b> <i>\"taksiga 15 ming sarfladim\"</i> deb ayting."
+        )
+        return
+
 
     user_id = message.from_user.id if message.from_user else 0
     amount = parsed["amount"]

@@ -96,18 +96,22 @@ def transcribe_and_parse_audio(
 
     cat_list = ", ".join(categories) if categories else "Oziq-ovqat, Transport, Kofe/Kafe, Xarid, Kommunal, Ko'ngilochar, Maosh, Boshqa"
 
-    prompt = f"""Listen carefully to this Uzbek voice audio message.
-Extract transaction details in JSON format:
-{{
-  "amount": integer (amount in UZS),
-  "category": "matching category from [{cat_list}]",
-  "description": "short summary",
-  "type": "expense" or "income",
-  "transcript": "transcribed speech in Uzbek"
-}}
+    prompt = f"""Listen carefully to this voice audio message in Uzbek / Russian / English.
+First transcribe the exact spoken words into 'transcript' field.
+Then extract the transaction sum (in UZS currency integer) and category.
 
-If no financial transaction is mentioned, output null.
-Respond STRICTLY with valid JSON.
+Uzbek numbers might be spoken in words (e.g. 'on besh ming' = 15000, 'yigirma ming' = 20000, 'o\'n ikki ming' = 12000, 'yuz ming' = 100000, 'bir million' = 1000000).
+
+Allowed categories: [{cat_list}]
+
+Respond STRICTLY in JSON format:
+{{
+  "transcript": "transcribed spoken words",
+  "amount": integer or null (e.g. 15000),
+  "category": "matching category",
+  "description": "short summary of item",
+  "type": "expense" or "income"
+}}
 """
 
     try:
@@ -126,20 +130,22 @@ Respond STRICTLY with valid JSON.
             return None
 
         data = json.loads(resp_text)
-        if isinstance(data, dict) and "amount" in data and data["amount"]:
-            amount = int(data["amount"])
-            if amount > 0:
-                return {
-                    "amount": amount,
-                    "category": str(data.get("category") or "Boshqa"),
-                    "description": str(data.get("description") or ""),
-                    "type": str(data.get("type") or "expense").lower(),
-                    "transcript": str(data.get("transcript") or ""),
-                }
+        if isinstance(data, dict):
+            transcript = str(data.get("transcript") or "").strip()
+            raw_amount = data.get("amount")
+            amount = int(raw_amount) if raw_amount and str(raw_amount).isdigit() and int(raw_amount) > 0 else None
+            return {
+                "transcript": transcript,
+                "amount": amount,
+                "category": str(data.get("category") or "Boshqa"),
+                "description": str(data.get("description") or transcript),
+                "type": str(data.get("type") or "expense").lower(),
+            }
     except Exception as e:
         log.warning("Gemini Audio parsing failed: %s", e)
 
     return None
+
 
 
 def ocr_receipt_image(
