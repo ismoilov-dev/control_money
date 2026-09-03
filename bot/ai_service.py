@@ -18,10 +18,10 @@ from google.genai import types
 log = logging.getLogger(__name__)
 
 MODEL_CANDIDATES = [
+    "gemini-3.6-flash",
+    "gemini-flash-latest",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
-    "gemini-flash-latest",
-    "gemini-1.5-pro",
 ]
 
 
@@ -41,7 +41,7 @@ def _generate_with_fallback(client: genai.Client, contents: Any) -> Any:
     """Execute generate_content with model fallback & retry for 404/503/UNAVAILABLE errors."""
     last_error = None
 
-    # Try all model candidates
+    # Try all model candidates in order, starting with gemini-3.6-flash
     for model_name in MODEL_CANDIDATES:
         try:
             return client.models.generate_content(
@@ -53,11 +53,11 @@ def _generate_with_fallback(client: genai.Client, contents: Any) -> Any:
             last_error = e
             continue
 
-    # If all candidate models failed, wait 1 second and retry primary model once
+    # If all candidate models failed, wait 1 second and retry gemini-3.6-flash once
     time.sleep(1)
     try:
         return client.models.generate_content(
-            model=MODEL_CANDIDATES[0],
+            model="gemini-3.6-flash",
             contents=contents,
         )
     except Exception as e:
