@@ -41,7 +41,9 @@ async def main() -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Botni ishga tushirish / Qo'llanma"),
+            BotCommand(command="bekor_qilish", description="Oxirgi kiritilgan xarajatni o'chirish"),
             BotCommand(command="balans", description="Jami balans va hisobot"),
+
             BotCommand(command="daromad", description="Daromad kiritish (+3 mln maosh)"),
             BotCommand(command="set_weekly_money", description="Haftalik limit o'rnatish"),
             BotCommand(command="limit", description="Kategoriya bo'yicha oylik limit"),

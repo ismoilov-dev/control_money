@@ -32,6 +32,61 @@ log = logging.getLogger(__name__)
 router = Router()
 
 
+def get_undo_keyboard() -> InlineKeyboardMarkup:
+    """Return inline keyboard with undo/delete button."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Bekor qilish (O'chirish)", callback_data="delete_last")]
+        ]
+    )
+
+
+@router.message(Command("bekor_qilish", "delete_last", "del", "undo"))
+async def cmd_delete_last(message: Message, db: Database) -> None:
+    """Delete the last entered expense or income."""
+    user_id = message.from_user.id if message.from_user else 0
+    deleted = await db.delete_last(user_id)
+
+    if not deleted:
+        await message.answer("ℹ️ O'chirish uchun bironta ham xarajat yoki kirim topilmadi.")
+        return
+
+    amount = deleted.get("amount", 0)
+    category = deleted.get("category", "Boshqa")
+    desc = deleted.get("description", "")
+    tx_type = deleted.get("type", "expense")
+
+    icon = "💸 Xarajat" if tx_type == "expense" else "💰 Kirim"
+    await message.answer(
+        f"🗑 <b>Oxirgi kiritilgan {icon} bekor qilindi va bazadan o'chirildi!</b>\n"
+        f"➖ Summa: <b>{format_money(amount)} so'm</b>\n"
+        f"🏷 Kategoriya: <b>{category}</b> ({desc})"
+    )
+
+
+@router.callback_query(F.data == "delete_last")
+async def cb_delete_last(callback: CallbackQuery, db: Database) -> None:
+    """Callback query handler to delete the last recorded expense."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    deleted = await db.delete_last(user_id)
+
+    if not deleted:
+        await callback.answer("O'chirish uchun ma'lumot topilmadi.", show_alert=True)
+        return
+
+    amount = deleted.get("amount", 0)
+    category = deleted.get("category", "Boshqa")
+    desc = deleted.get("description", "")
+
+    await callback.answer("Oxirgi kiritilgan xarajat bekor qilindi!", show_alert=True)
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"🗑 <b>Oxirgi kiritilgan xarajat bekor qilindi va bazadan o'chirildi!</b>\n"
+            f"➖ Summa: <b>{format_money(amount)} so'm</b> ({category} - {desc})"
+        )
+
+
+
 class AppMiddleware(BaseMiddleware):
     """Inject database and settings into event handler data."""
 
@@ -504,8 +559,10 @@ async def on_voice(message: Message, db: Database, settings: Settings) -> None:
 
     await message.answer(
         f"{icon} saqlandi: <b>{sign}{format_money(amount)} so'm</b>\n"
-        f"🏷 Kategoriya: <b>{category}</b> ({description}){transcript_str}"
+        f"🏷 Kategoriya: <b>{category}</b> ({description}){transcript_str}",
+        reply_markup=get_undo_keyboard(),
     )
+
 
     if tx_type == "expense":
         warnings = await check_spending_limit_warnings(db, user_id, category)
@@ -642,9 +699,16 @@ async def on_text(message: Message, db: Database, settings: Settings) -> None:
     desc_str = f" ({description})" if description and description != str(amount) else ""
 
     if tx_type == "income":
-        await message.answer(f"💰 Kirim saqlandi: <b>+{format_money(amount)} so'm</b>{desc_str}")
+        await message.answer(
+            f"💰 Kirim saqlandi: <b>+{format_money(amount)} so'm</b>{desc_str}",
+            reply_markup=get_undo_keyboard(),
+        )
     else:
-        await message.answer(f"💸 Xarajat saqlandi: <b>{format_money(amount)} so'm</b>{desc_str}")
+        await message.answer(
+            f"💸 Xarajat saqlandi: <b>{format_money(amount)} so'm</b>{desc_str}",
+            reply_markup=get_undo_keyboard(),
+        )
+
         warnings = await check_spending_limit_warnings(db, user_id, category)
         for w in warnings:
             await message.answer(w)
