@@ -19,6 +19,7 @@ class Settings:
     allowed_user_id: int | None
     database_path: Path
     timezone: str
+    gemini_api_key: str
 
 
 def load_settings() -> Settings:
@@ -33,9 +34,13 @@ def load_settings() -> Settings:
     if not db_path.is_absolute():
         db_path = ROOT_DIR / db_path
 
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+
     return Settings(
         bot_token=token,
         allowed_user_id=allowed_user_id,
         database_path=db_path,
         timezone=os.getenv("TIMEZONE", "Asia/Tashkent").strip() or "Asia/Tashkent",
+        gemini_api_key=gemini_key,
     )
+

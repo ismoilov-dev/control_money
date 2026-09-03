@@ -35,30 +35,44 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
-    setup_router(db)
+    setup_router(db, settings)
     dp.include_router(router)
 
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Botni ishga tushirish / Qo'llanma"),
-            BotCommand(command="set_weekly_money", description="Haftalik pul o'rnatish"),
+            BotCommand(command="balans", description="Jami balans va hisobot"),
+            BotCommand(command="daromad", description="Daromad kiritish (+3 mln maosh)"),
+            BotCommand(command="set_weekly_money", description="Haftalik limit o'rnatish"),
+            BotCommand(command="limit", description="Kategoriya bo'yicha oylik limit"),
+            BotCommand(command="kunlik_maqsad", description="Kunlik xarajat maqsadi"),
+            BotCommand(command="maqsad", description="Jamg'arma maqsadlari"),
+            BotCommand(command="maqsad_yangi", description="Yangi jamg'arma maqsadi yaratish"),
+            BotCommand(command="takroriy", description="Takroriy xarajatlar (Obunalar)"),
+            BotCommand(command="maslahat", description="AI Moliyaviy maslahatchi (Gemini)"),
+            BotCommand(command="stats", description="Diagramma va oylik tahlil"),
             BotCommand(command="today", description="Bugungi hisobot"),
-            BotCommand(command="week", description="Bu haftalik hisobot va qoldiq"),
+            BotCommand(command="week", description="Bu haftalik hisobot"),
             BotCommand(command="month", description="Bu oylik hisobot"),
+            BotCommand(command="export", description="Barcha xarajatlarni Excel'ga yuklash"),
         ]
     )
 
     await bot.set_my_description(
-        "Shaxsiy moliya va haftalik byudjetingizni nazorat qiluvchi qulay bot 💸\n\n"
-        "✨ Xarajat va kirimlaringizni oddiy matn orqali tezkor saqlang:\n"
-        "• -12 taksi (12 000 so'm xarajat)\n"
-        "• +3000000 maosh (3 000 000 so'm kirim)\n\n"
-        "📌 /set_weekly_money 300k orqali haftalik limit o'rnating va real-vaqtda qoldiqni kuzatib boring!"
+        "FinMate Bot — AI bilan jihozlangan aqlli shaxsiy moliya yordamchisi 💸\n\n"
+        "✨ Qulayliklar:\n"
+        "• Matn: \"kofega 15000 ketdi\"\n"
+        "• Ovozli xabar kiritish 🎙\n"
+        "• Chek rasmidan OCR o'qish 🧾\n"
+        "• Byudjet va jamg'arma maqsadlari 🎯\n"
+        "• AI Maslahatchi 🤖\n"
+        "• Excel export & diagrammalar 📊"
     )
 
     await bot.set_my_short_description(
-        "Haftalik byudjet va xarajatlarni tezkor hisoblash boti 💸"
+        "AI bilan jihozlangan aqlli shaxsiy moliya va byudjet boti 💸"
     )
+
 
     scheduler = setup_scheduler(
         bot=bot,
