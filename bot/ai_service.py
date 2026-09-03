@@ -1,7 +1,7 @@
 """Gemini AI Service for FinMate Bot.
 
 Handles NLP expense extraction, audio speech-to-text parsing, receipt image OCR,
-and personalized financial advice using Google Gemini API.
+and personalized financial advice using Google Gemini API with model fallback.
 """
 
 from __future__ import annotations
@@ -15,6 +15,15 @@ import google.generativeai as genai
 
 log = logging.getLogger(__name__)
 
+MODEL_CANDIDATES = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro",
+    "gemini-pro",
+]
+
 
 def _init_gemini(api_key: str) -> str | None:
     """Return error string if API key is invalid/missing, else None."""
@@ -26,6 +35,27 @@ def _init_gemini(api_key: str) -> str | None:
     except Exception as e:
         log.error("Failed to configure Gemini API: %s", e)
         return str(e)
+
+
+def _generate_with_fallback(contents: Any) -> Any:
+    """Try available Gemini models until one succeeds without 404."""
+    last_error = None
+    for model_name in MODEL_CANDIDATES:
+        try:
+            model = genai.GenerativeModel(model_name)
+            res = model.generate_content(contents)
+            return res
+        except Exception as e:
+            err_str = str(e)
+            if "404" in err_str or "not found" in err_str:
+                last_error = e
+                continue
+            else:
+                raise e
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No available Gemini model succeeded.")
 
 
 def parse_text_with_gemini(
@@ -57,8 +87,7 @@ If no transaction amount can be determined, output null.
 """
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+        response = _generate_with_fallback(prompt)
         resp_text = (response.text or "").strip()
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
@@ -116,12 +145,11 @@ Respond STRICTLY in JSON format:
 """
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
         contents = [
             {"mime_type": mime_type, "data": audio_bytes},
             prompt,
         ]
-        response = model.generate_content(contents)
+        response = _generate_with_fallback(contents)
         resp_text = (response.text or "").strip()
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
@@ -185,12 +213,11 @@ If it is not a payment receipt or amount is unreadable, output null.
 """
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
         contents = [
             {"mime_type": mime_type, "data": image_bytes},
             prompt,
         ]
-        response = model.generate_content(contents)
+        response = _generate_with_fallback(contents)
         resp_text = (response.text or "").strip()
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
@@ -240,8 +267,7 @@ Foydalanuvchiga uning real xarajat va daromadlariga asoslangan, amaliy, do'stona
 """
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+        response = _generate_with_fallback(prompt)
         return (response.text or "").strip()
     except Exception as e:
         log.warning("Gemini advice request failed: %s", e)
