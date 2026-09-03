@@ -1,42 +1,26 @@
-"""Command, callback, and free-text expense handlers."""
+"""Command and free-text transaction handlers (multi-user budget tracker)."""
 
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    TelegramObject,
-)
+from aiogram.types import Message, TelegramObject
 
 from bot.db import Database
-from bot.parser import format_money, guess_category, parse_expense
+from bot.parser import format_money, parse_expense
 
 log = logging.getLogger(__name__)
 router = Router()
 
 
-class ExpenseStates(StatesGroup):
-    waiting_for_category = State()
-    waiting_for_new_category = State()
-    waiting_for_delete_category = State()
+class DbMiddleware(BaseMiddleware):
+    """Inject database dependency into event data for all users."""
 
-
-class OwnerOnlyMiddleware(BaseMiddleware):
-    """Reject anyone who is not the configured Telegram user."""
-
-    def __init__(self, db: Database, allowed_user_id: int) -> None:
+    def __init__(self, db: Database) -> None:
         self.db = db
-        self.allowed_user_id = allowed_user_id
 
     async def __call__(
         self,
@@ -44,276 +28,188 @@ class OwnerOnlyMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        user = data.get("event_from_user")
-        if user is None or user.id != self.allowed_user_id:
-            if isinstance(event, Message):
-                await event.answer("This bot is private.")
-            return None
         data["db"] = self.db
         return await handler(event, data)
 
 
-def setup_router(db: Database, allowed_user_id: int) -> Router:
-    middleware = OwnerOnlyMiddleware(db, allowed_user_id)
+def setup_router(db: Database) -> Router:
+    middleware = DbMiddleware(db)
     router.message.outer_middleware(middleware)
-    router.callback_query.outer_middleware(middleware)
     return router
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
+async def cmd_start(message: Message) -> None:
     await message.answer(
-        "Xarajatlaringizni shu yerga yozib boring.\n\n"
-        "Just send a message like:\n"
-        "• <code>30000 taksi</code>\n"
-        "• <code>150k ovqatga ketdi</code>\n"
-        "• <code>sotib oldim kiyim 200000</code>\n\n"
-        "Commands:\n"
-        "/today — today's total\n"
-        "/week — this week\n"
-        "/month — this month\n"
-        "/categories — view or edit categories\n"
-        "/delete_last — undo the last expense"
+        "Moliya botiga xush kelibsiz!\n\n"
+        "<b>Qanday ishlatiladi:</b>\n"
+        "1️⃣ Haftalik pulingizni kiriting:\n"
+        "   <code>/set_weekly_money 300k</code>\n\n"
+        "2️⃣ Xarajatlarni minus (-) bilan yoki oddiy yozing:\n"
+        "   • <code>-12 taksi</code> (12 000 so'm)\n"
+        "   • <code>-150 ovqat</code> (150 000 so'm)\n"
+        "   • <code>30 taksi</code> (30 000 so'm)\n\n"
+        "3️⃣ Kirimlarni plyus (+) bilan yozing:\n"
+        "   • <code>+3000000 maosh</code>\n\n"
+        "<b>Buyruqlar:</b>\n"
+        "/set_weekly_money 300k — Haftalik pul o'rnatish\n"
+        "/today — Bugungi hisobot\n"
+        "/week — Bu haftalik hisobot va qoldiq\n"
+        "/month — Bu oylik hisobot"
+    )
+
+
+@router.message(Command("set_weekly_money", "set_weekly_limit", "set_week_limit"))
+async def cmd_set_weekly_money(message: Message, db: Database) -> None:
+    args = (message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "Haftalik pulni o'rnatish uchun buyruqni bering:\n"
+            "<code>/set_weekly_money 300k</code>"
+        )
+        return
+    parsed = parse_expense(args[1])
+    if parsed is None or parsed.amount <= 0:
+        await message.answer(
+            "Noto'g'ri summa kiritildi. Masalan: <code>/set_weekly_money 300k</code>"
+        )
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    await db.set_weekly_limit(parsed.amount, user_id=user_id)
+    await message.answer(
+        f"✅ Haftalik pul o'rnatildi: <b>{format_money(parsed.amount)} so'm</b>"
     )
 
 
 @router.message(Command("today"))
 async def cmd_today(message: Message, db: Database) -> None:
+    user_id = message.from_user.id if message.from_user else 0
     start, end = db.day_range()
-    rows = await db.expenses_between(message.from_user.id, start, end)
-    emojis = await db.emoji_map()
-    await message.answer(_render_report("Today", rows, emojis))
+    rows = await db.expenses_between(user_id, start, end)
+    weekly_limit = await db.get_weekly_limit(user_id=user_id)
+    await message.answer(_render_report("Bugungi hisobot", rows, weekly_limit=weekly_limit))
 
 
 @router.message(Command("week"))
 async def cmd_week(message: Message, db: Database) -> None:
+    user_id = message.from_user.id if message.from_user else 0
     start, end = db.week_range()
-    rows = await db.expenses_between(message.from_user.id, start, end)
-    emojis = await db.emoji_map()
-    await message.answer(_render_report("This week", rows, emojis))
+    rows = await db.expenses_between(user_id, start, end)
+    weekly_limit = await db.get_weekly_limit(user_id=user_id)
+    await message.answer(_render_report("Bu haftalik hisobot", rows, weekly_limit=weekly_limit))
 
 
 @router.message(Command("month"))
 async def cmd_month(message: Message, db: Database) -> None:
+    user_id = message.from_user.id if message.from_user else 0
     start, end = db.month_range()
-    rows = await db.expenses_between(message.from_user.id, start, end)
-    emojis = await db.emoji_map()
-    await message.answer(_render_report("This month", rows, emojis))
-
-
-@router.message(Command("delete_last"))
-async def cmd_delete_last(message: Message, db: Database) -> None:
-    deleted = await db.delete_last(message.from_user.id)
-    if not deleted:
-        await message.answer("Nothing to delete — no expenses logged yet.")
-        return
-    desc = f" ({deleted['description']})" if deleted.get("description") else ""
-    await message.answer(
-        f"Removed: {format_money(deleted['amount'])} so'm — {deleted['category']}{desc}"
-    )
-
-
-@router.message(Command("categories"))
-async def cmd_categories(message: Message, db: Database, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        await _categories_text(db),
-        reply_markup=_categories_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "cat:add")
-async def cb_add_category(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(ExpenseStates.waiting_for_new_category)
-    await callback.message.answer(
-        "Send a new category in this format:\n"
-        "<code>Name | emoji | keyword1, keyword2</code>\n\n"
-        "Example:\n"
-        "<code>Health | 💊 | dori, apteka, shifokor</code>"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "cat:delete")
-async def cb_delete_category(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
-    cats = await db.list_categories()
-    buttons = [
-        [InlineKeyboardButton(text=f"{c['emoji']} {c['name']}", callback_data=f"catdel:{c['name']}")]
-        for c in cats
-    ]
-    buttons.append([InlineKeyboardButton(text="Cancel", callback_data="cat:cancel")])
-    await state.set_state(ExpenseStates.waiting_for_delete_category)
-    await callback.message.answer("Which category should I remove?", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-    await callback.answer()
-
-
-@router.callback_query(F.data == "cat:cancel")
-async def cb_cancel_category(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await callback.message.answer("Cancelled.")
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("catdel:"))
-async def cb_confirm_delete_category(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
-    name = callback.data.split(":", 1)[1]
-    if name in {"Food", "Transport", "Clothing", "Utilities", "Rent", "Other"}:
-        await callback.answer("Built-in categories can't be deleted. You can still add keywords.", show_alert=True)
-        return
-    ok = await db.delete_category(name)
-    await state.clear()
-    if ok:
-        await callback.message.answer(f"Removed category: {name}")
-    else:
-        await callback.message.answer("That category was not found.")
-    await callback.answer()
-
-
-@router.message(ExpenseStates.waiting_for_new_category)
-async def on_new_category(message: Message, db: Database, state: FSMContext) -> None:
-    if not message.text:
-        return
-    parts = [p.strip() for p in message.text.split("|")]
-    if len(parts) < 1 or not parts[0]:
-        await message.answer("Please send: <code>Name | emoji | keywords</code>")
-        return
-    name = parts[0]
-    emoji = parts[1] if len(parts) > 1 and parts[1] else "📌"
-    keywords = parts[2] if len(parts) > 2 else name.lower()
-    await db.add_category(name, emoji, keywords)
-    await state.clear()
-    await message.answer(f"Saved category {emoji} {name}.", reply_markup=_categories_keyboard())
-
-
-@router.callback_query(F.data.startswith("pickcat:"))
-async def cb_pick_category(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
-    data = await state.get_data()
-    amount = data.get("amount")
-    description = data.get("description") or ""
-    if amount is None:
-        await callback.answer("That draft expired. Send the expense again.", show_alert=True)
-        await state.clear()
-        return
-    category = callback.data.split(":", 1)[1]
-    await db.add_expense(callback.from_user.id, int(amount), category, description or None)
-    await state.clear()
-    extra = f"\n{description}" if description else ""
-    await callback.message.edit_text(
-        f"Logged {format_money(int(amount))} so'm → {category}{extra}"
-    )
-    await callback.answer()
+    rows = await db.expenses_between(user_id, start, end)
+    await message.answer(_render_report("Bu oylik hisobot", rows))
 
 
 @router.message(F.text)
-async def on_text(message: Message, db: Database, state: FSMContext) -> None:
-    """Treat any non-command text as a possible expense."""
-    text = message.text or ""
+async def on_text(message: Message, db: Database) -> None:
+    text = (message.text or "").strip()
     if text.startswith("/"):
         return
 
-    current = await state.get_state()
-    if current == ExpenseStates.waiting_for_category.state:
-        extra = await db.extra_keywords()
-        category = guess_category(text, extra)
-        data = await state.get_data()
-        amount = data.get("amount")
-        description = data.get("description") or text
-        if category and amount is not None:
-            await db.add_expense(message.from_user.id, int(amount), category, description)
-            await state.clear()
-            await message.answer(f"Logged {format_money(int(amount))} so'm → {category}")
-            return
-        await message.answer("Please tap a category button, or send a word I know.")
-        return
-
-    extra = await db.extra_keywords()
-    parsed = parse_expense(text, extra)
+    parsed = parse_expense(text)
     if parsed is None:
         await message.answer(
-            "I couldn't find an amount. Try:\n"
-            "<code>15000 taksi</code> or <code>150k ovqat</code>"
+            "Summani aniqlay olmadim. Masalan:\n"
+            "<code>-12 taksi</code> yoki <code>+3000000 maosh</code>"
         )
         return
 
-    if parsed.category:
-        await db.add_expense(
-            message.from_user.id,
-            parsed.amount,
-            parsed.category,
-            parsed.description or None,
-        )
-        note = f" — {parsed.description}" if parsed.description else ""
+    user_id = message.from_user.id if message.from_user else 0
+    category = "Kirim" if parsed.type == "income" else "Xarajat"
+    description = parsed.description or ("xarajat" if parsed.type == "expense" else "kirim")
+
+    await db.add_expense(
+        user_id,
+        parsed.amount,
+        category,
+        description,
+        type=parsed.type,
+    )
+
+    desc_str = f" ({description})" if description and description != str(parsed.amount) else ""
+
+    if parsed.type == "income":
         await message.answer(
-            f"Logged {format_money(parsed.amount)} so'm → {parsed.category}{note}"
+            f"💰 Kirim saqlandi: +{format_money(parsed.amount)} so'm{desc_str}"
         )
-        return
-
-    await state.set_state(ExpenseStates.waiting_for_category)
-    await state.update_data(amount=parsed.amount, description=parsed.description)
-    cats = await db.list_categories()
-    await message.answer(
-        f"Got {format_money(parsed.amount)} so'm. Which category?",
-        reply_markup=_category_picker(cats),
-    )
+    else:
+        await message.answer(
+            f"💸 Xarajat saqlandi: {format_money(parsed.amount)} so'm{desc_str}"
+        )
+        warnings = await check_spending_limit_warnings(db, user_id)
+        for w in warnings:
+            await message.answer(w)
 
 
-def _category_picker(categories: list[dict[str, Any]]) -> InlineKeyboardMarkup:
-    buttons: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for cat in categories:
-        row.append(
-            InlineKeyboardButton(
-                text=f"{cat['emoji']} {cat['name']}",
-                callback_data=f"pickcat:{cat['name']}",
+async def check_spending_limit_warnings(db: Database, user_id: int) -> list[str]:
+    warnings: list[str] = []
+    weekly_limit = await db.get_weekly_limit(user_id=user_id)
+    if weekly_limit and weekly_limit > 0:
+        start, end = db.week_range()
+        rows = await db.expenses_between(user_id, start, end)
+        week_expense = sum(
+            int(r["amount"]) for r in rows if r.get("type", "expense") == "expense"
+        )
+        remaining = weekly_limit - week_expense
+        pct = (week_expense / weekly_limit) * 100
+        pct_int = int(round(pct))
+
+        if pct >= 100:
+            warnings.append(
+                f"🚨 <b>Diqqat! Haftalik limit oshib ketdi!</b> ({pct_int}%)\n"
+                f"Sarflangan: <b>{format_money(week_expense)} so'm</b> / {format_money(weekly_limit)} so'm\n"
+                f"Oshiqcha: <b>{format_money(abs(remaining))} so'm</b>"
             )
-        )
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+        elif pct >= 80:
+            warnings.append(
+                f"⚠️ <b>Haftalik limitga yaqinlashdingiz!</b> ({pct_int}%)\n"
+                f"Qoldiq: <b>{format_money(remaining)} so'm</b> (Sarflangan: {format_money(week_expense)} / {format_money(weekly_limit)} so'm)"
+            )
+        else:
+            warnings.append(
+                f"📊 Haftalik qoldiq: <b>{format_money(remaining)} so'm</b> ({format_money(week_expense)} / {format_money(weekly_limit)} so'm)"
+            )
+    return warnings
 
 
-def _categories_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="➕ Add", callback_data="cat:add"),
-                InlineKeyboardButton(text="🗑 Delete", callback_data="cat:delete"),
-            ]
-        ]
-    )
+def _render_report(
+    title: str,
+    rows: list[dict[str, Any]],
+    weekly_limit: int | None = None,
+) -> str:
+    income = sum(int(r["amount"]) for r in rows if r.get("type", "expense") == "income")
+    expense = sum(int(r["amount"]) for r in rows if r.get("type", "expense") == "expense")
+    balance = income - expense
 
-
-async def _categories_text(db: Database) -> str:
-    cats = await db.list_categories()
-    lines = ["Categories:"]
-    for cat in cats:
-        kws = cat["keywords"].replace(",", ", ") if cat["keywords"] else "—"
-        lines.append(f"{cat['emoji']} <b>{cat['name']}</b>\n<code>{kws}</code>")
-    lines.append("\nAdd a category with extra keywords so I can auto-detect them.")
-    return "\n\n".join(lines)
-
-
-def _render_report(title: str, rows: list[dict[str, Any]], emojis: dict[str, str]) -> str:
-    if not rows:
-        return f"<b>{title}</b>\nNo expenses yet."
-
-    total = sum(int(r["amount"]) for r in rows)
-    buckets: dict[str, int] = defaultdict(int)
-    for row in rows:
-        buckets[row["category"]] += int(row["amount"])
-
-    ranked = sorted(buckets.items(), key=lambda item: item[1], reverse=True)
     lines = [
         f"<b>{title}</b>",
-        f"Total: <b>{format_money(total)} so'm</b>",
-        "",
+        f"💰 Kirim: <b>{format_money(income)} so'm</b>",
+        f"💸 Xarajat: <b>{format_money(expense)} so'm</b>",
     ]
-    for name, amount in ranked:
-        pct = round(amount * 100 / total) if total else 0
-        emoji = emojis.get(name, "📌")
-        lines.append(f"{emoji} {name}: {format_money(amount)} so'm ({pct}%)")
+
+    if weekly_limit and weekly_limit > 0:
+        remaining = weekly_limit - expense
+        pct = round((expense / weekly_limit) * 100) if weekly_limit else 0
+        lines.append(f"📌 Haftalik pul: <b>{format_money(weekly_limit)} so'm</b>")
+        lines.append(f"📊 Haftalik qoldiq: <b>{format_money(remaining)} so'm</b> ({pct}% sarflandi)")
+    else:
+        lines.append(f"📊 Balans: <b>{format_money(balance)} so'm</b>")
+
+    if rows:
+        lines.append("\n<b>Yozuvlar:</b>")
+        for r in rows:
+            tx_type = r.get("type", "expense")
+            sign = "+" if tx_type == "income" else "-"
+            icon = "💰" if tx_type == "income" else "💸"
+            desc = r.get("description") or ""
+            desc_str = f" — {desc}" if desc else ""
+            lines.append(f"{icon} {sign}{format_money(r['amount'])} so'm{desc_str}")
+
     return "\n".join(lines)

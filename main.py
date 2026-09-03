@@ -35,17 +35,16 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
-    setup_router(db, settings.allowed_user_id)
+    setup_router(db)
     dp.include_router(router)
 
     await bot.set_my_commands(
         [
-            BotCommand(command="start", description="How to log expenses"),
-            BotCommand(command="today", description="Today's spending"),
-            BotCommand(command="week", description="This week's spending"),
-            BotCommand(command="month", description="This month's spending"),
-            BotCommand(command="categories", description="View or edit categories"),
-            BotCommand(command="delete_last", description="Undo last expense"),
+            BotCommand(command="start", description="Botni ishga tushirish / Qo'llanma"),
+            BotCommand(command="set_weekly_money", description="Haftalik pul o'rnatish"),
+            BotCommand(command="today", description="Bugungi hisobot"),
+            BotCommand(command="week", description="Bu haftalik hisobot va qoldiq"),
+            BotCommand(command="month", description="Bu oylik hisobot"),
         ]
     )
 

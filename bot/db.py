@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS expenses (
     amount INTEGER NOT NULL,
     category TEXT NOT NULL,
     description TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'expense'
 );
 """
 
@@ -28,6 +29,13 @@ CREATE TABLE IF NOT EXISTS categories (
     name TEXT PRIMARY KEY,
     emoji TEXT NOT NULL DEFAULT '📌',
     keywords TEXT NOT NULL DEFAULT ''
+);
+"""
+
+_CREATE_SETTINGS = """
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -51,6 +59,16 @@ class Database:
         with self._connect() as conn:
             conn.execute(_CREATE_EXPENSES)
             conn.execute(_CREATE_CATEGORIES)
+            conn.execute(_CREATE_SETTINGS)
+
+            # Migration: Ensure 'type' column exists in existing expenses table
+            cursor = conn.execute("PRAGMA table_info(expenses)")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "type" not in columns:
+                conn.execute(
+                    "ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'"
+                )
+
             for name, data in DEFAULT_CATEGORIES.items():
                 keywords = ",".join(data["keywords"])  # type: ignore[arg-type]
                 conn.execute(
@@ -68,9 +86,10 @@ class Database:
         amount: int,
         category: str,
         description: str | None,
+        type: str = "expense",
     ) -> int:
         return await asyncio.to_thread(
-            self._add_expense_sync, user_id, amount, category, description
+            self._add_expense_sync, user_id, amount, category, description, type
         )
 
     def _add_expense_sync(
@@ -79,6 +98,7 @@ class Database:
         amount: int,
         category: str,
         description: str | None,
+        type: str = "expense",
     ) -> int:
         # Naive UTC string so SQLite datetime() comparisons stay reliable.
         created_at = datetime.now(tz=self.tz).astimezone(ZoneInfo("UTC")).strftime(
@@ -87,10 +107,10 @@ class Database:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO expenses (user_id, amount, category, description, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO expenses (user_id, amount, category, description, created_at, type)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, amount, category, description or None, created_at),
+                (user_id, amount, category, description or None, created_at, type),
             )
             conn.commit()
             return int(cur.lastrowid)
@@ -102,7 +122,7 @@ class Database:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, amount, category, description, created_at
+                SELECT id, amount, category, description, created_at, type
                 FROM expenses
                 WHERE user_id = ?
                 ORDER BY datetime(created_at) DESC, id DESC
@@ -140,7 +160,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, amount, category, description, created_at
+                SELECT id, amount, category, description, created_at, type
                 FROM expenses
                 WHERE user_id = ?
                   AND datetime(created_at) >= datetime(?)
@@ -154,6 +174,83 @@ class Database:
                 ),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    async def all_time_totals(self, user_id: int) -> dict[str, int]:
+        return await asyncio.to_thread(self._all_time_totals_sync, user_id)
+
+    def _all_time_totals_sync(self, user_id: int) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT type, SUM(amount) as total
+                FROM expenses
+                WHERE user_id = ?
+                GROUP BY type
+                """,
+                (user_id,),
+            ).fetchall()
+            totals = {"income": 0, "expense": 0}
+            for row in rows:
+                if row["type"] in totals:
+                    totals[row["type"]] = int(row["total"] or 0)
+            return totals
+
+    async def get_setting(self, key: str) -> str | None:
+        return await asyncio.to_thread(self._get_setting_sync, key)
+
+    def _get_setting_sync(self, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        await asyncio.to_thread(self._set_setting_sync, key, value)
+
+    def _set_setting_sync(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+            conn.commit()
+
+    async def get_monthly_limit(self) -> int | None:
+        val = await self.get_setting("monthly_limit")
+        if val and val.isdigit():
+            return int(val)
+        return None
+
+    async def set_monthly_limit(self, amount: int) -> None:
+        await self.set_setting("monthly_limit", str(amount))
+
+    async def get_weekly_limit(self, user_id: int | None = None) -> int | None:
+        if user_id is not None:
+            val = await self.get_setting(f"weekly_limit_{user_id}")
+            if val and val.isdigit():
+                return int(val)
+        val = await self.get_setting("weekly_limit")
+        if val and val.isdigit():
+            return int(val)
+        return None
+
+    async def set_weekly_limit(self, amount: int, user_id: int | None = None) -> None:
+        if user_id is not None:
+            await self.set_setting(f"weekly_limit_{user_id}", str(amount))
+        await self.set_setting("weekly_limit", str(amount))
+
+    async def get_savings_goal(self) -> int | None:
+        val = await self.get_setting("savings_goal")
+        if val and val.isdigit():
+            return int(val)
+        return None
+
+    async def set_savings_goal(self, amount: int) -> None:
+        await self.set_setting("savings_goal", str(amount))
 
     async def list_categories(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(self._list_categories_sync)
@@ -227,3 +324,4 @@ class Database:
 
 def _to_utc(dt: datetime) -> datetime:
     return dt.astimezone(ZoneInfo("UTC"))
+

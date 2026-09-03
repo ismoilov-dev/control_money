@@ -13,9 +13,8 @@ from bot.db import Database
 log = logging.getLogger(__name__)
 
 REMINDER_TEXT = (
-    "Hey — nothing logged today yet.\n"
-    "If you spent anything, just send it like:\n"
-    "<code>15000 taksi</code>"
+    "Bugun hali xarajat yozmadingiz.\n"
+    "Masalan: <code>-12 taksi</code>"
 )
 
 

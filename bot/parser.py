@@ -101,6 +101,39 @@ DEFAULT_CATEGORIES: dict[str, dict[str, object]] = {
             "uy-joy",
         ),
     },
+    "Salary": {
+        "emoji": "💰",
+        "keywords": (
+            "maosh",
+            "oylik",
+            "зарплата",
+            "zarplata",
+            "salary",
+            "ish haq",
+        ),
+    },
+    "Freelance": {
+        "emoji": "💻",
+        "keywords": (
+            "frilans",
+            "freelance",
+            "фриланс",
+            "proekt",
+            "projekt",
+        ),
+    },
+    "Gift": {
+        "emoji": "🎁",
+        "keywords": (
+            "sovg'a",
+            "sovga",
+            "podarok",
+            "подарок",
+            "gift",
+            "hadya",
+            "xadya",
+        ),
+    },
     "Other": {
         "emoji": "📦",
         "keywords": ("boshqa", "другое", "other", "har xil"),
@@ -110,6 +143,26 @@ DEFAULT_CATEGORIES: dict[str, dict[str, object]] = {
 # Short keywords that would false-positive inside longer words (e.g. "uy" in "buyurtma").
 # These only match a token that equals the keyword or starts with it.
 SHORT_KEYWORDS = {"uy", "gaz", "suv", "non", "choy"}
+
+INCOME_KEYWORDS = {
+    "maosh",
+    "kirim",
+    "daromad",
+    "oldim",
+    "oylik",
+    "zarplata",
+    "frilans",
+    "freelance",
+    "sovg'a",
+    "sovga",
+    "podarok",
+    "hadya",
+    "xadya",
+    "доход",
+    "зарплата",
+    "фриланс",
+    "подарок",
+}
 
 # 150k / 150 к / 2.5ming / 30 000 / 200000
 _AMOUNT_RE = re.compile(
@@ -129,6 +182,7 @@ class ParsedExpense:
     amount: int
     category: str | None
     description: str
+    type: str = "expense"
 
 
 def format_money(amount: int) -> str:
@@ -145,6 +199,20 @@ def category_emoji(name: str, extra: dict[str, str] | None = None) -> str:
     return "📌"
 
 
+def _is_income_text(text: str) -> bool:
+    clean = text.lstrip()
+    if clean.startswith("-"):
+        return False
+    if clean.startswith("+"):
+        return True
+    tokens = _tokenize(text)
+    for token in tokens:
+        for kw in INCOME_KEYWORDS:
+            if _token_matches(token, kw.lower()):
+                return True
+    return False
+
+
 def parse_expense(
     text: str,
     extra_keywords: dict[str, list[str]] | None = None,
@@ -157,10 +225,20 @@ def parse_expense(
     if amount is None or span is None:
         return None
 
+    is_income = _is_income_text(text)
+    tx_type = "income" if is_income else "expense"
+
     leftover = (text[: span[0]] + " " + text[span[1] :]).strip()
-    leftover = re.sub(r"\s+", " ", leftover)
+    leftover = re.sub(r"^[\+\-]\s*", "", leftover)
+    leftover = re.sub(r"\s+", " ", leftover).strip()
+
     category = guess_category(leftover or text, extra_keywords)
-    return ParsedExpense(amount=amount, category=category, description=leftover)
+    return ParsedExpense(
+        amount=amount,
+        category=category,
+        description=leftover,
+        type=tx_type,
+    )
 
 
 def guess_category(
@@ -224,6 +302,8 @@ def _extract_amount(text: str) -> tuple[int | None, tuple[int, int] | None]:
         suffix = (match.group("suffix") or "").lower()
         if suffix in {"k", "к", "ming", "минг"}:
             value *= 1000
+        elif value < 1000:
+            value *= 1000
         amount = int(round(value))
         if amount <= 0:
             continue
@@ -250,3 +330,6 @@ def _token_matches(token: str, keyword: str) -> bool:
         return True
     # Allow "ovqat" inside "ovqatga" / "oziqovqat" for longer stems.
     return len(keyword) >= 4 and keyword in token
+
+
+

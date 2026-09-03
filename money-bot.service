@@ -1,0 +1,15 @@
+[Unit]
+Description=Ismat Finance Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/ismat-dev/Desktop/money
+ExecStart=/home/ismat-dev/Desktop/money/.venv/bin/python3 main.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ismat-dev/Desktop/money/.env
+
+[Install]
+WantedBy=multi-user.target
