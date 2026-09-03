@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from google import genai
@@ -17,9 +18,10 @@ from google.genai import types
 log = logging.getLogger(__name__)
 
 MODEL_CANDIDATES = [
-    "gemini-flash-latest",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
+    "gemini-flash-latest",
+    "gemini-1.5-pro",
 ]
 
 
@@ -36,8 +38,10 @@ def _get_client(api_key: str) -> tuple[genai.Client | None, str | None]:
 
 
 def _generate_with_fallback(client: genai.Client, contents: Any) -> Any:
-    """Execute generate_content with model fallback for maximum resilience."""
+    """Execute generate_content with model fallback & retry for 404/503/UNAVAILABLE errors."""
     last_error = None
+
+    # Try all model candidates
     for model_name in MODEL_CANDIDATES:
         try:
             return client.models.generate_content(
@@ -45,12 +49,19 @@ def _generate_with_fallback(client: genai.Client, contents: Any) -> Any:
                 contents=contents,
             )
         except Exception as e:
-            err_str = str(e)
-            if "404" in err_str or "not found" in err_str:
-                last_error = e
-                continue
-            else:
-                raise e
+            log.warning("Gemini model '%s' failed: %s", model_name, e)
+            last_error = e
+            continue
+
+    # If all candidate models failed, wait 1 second and retry primary model once
+    time.sleep(1)
+    try:
+        return client.models.generate_content(
+            model=MODEL_CANDIDATES[0],
+            contents=contents,
+        )
+    except Exception as e:
+        last_error = e
 
     if last_error:
         raise last_error
