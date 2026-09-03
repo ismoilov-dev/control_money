@@ -532,16 +532,59 @@ async def on_voice(message: Message, db: Database, settings: Settings) -> None:
             await message.answer(f"⚠️ <b>Gemini API xatoligi:</b> <code>{err}</code>")
         return
 
+async def handle_voice_or_text_command_intent(
+    text: str, message: Message, db: Database, settings: Settings
+) -> bool:
+    """Check if transcribed voice audio or text is a voice command like 'bugungi xarajatim', 'balans', etc."""
+    t = text.lower().strip()
+
+    # 1. Today's report
+    if any(k in t for k in ["bugun", "bugungi"]):
+        await cmd_today(message, db)
+        return True
+
+    # 2. Weekly report
+    if any(k in t for k in ["hafta", "haftalik"]):
+        await cmd_week(message, db)
+        return True
+
+    # 3. Monthly report
+    if any(k in t for k in ["oylik", "bu oy", "oylik hisobot"]):
+        await cmd_month(message, db)
+        return True
+
+    # 4. Total balance / summary
+    if any(k in t for k in ["balans", "hisobim", "qancha pul"]):
+        await cmd_balance(message, db)
+        return True
+
+    # 5. Undo last expense
+    if any(k in t for k in ["bekor qil", "oxirgi xarajatni o'chir", "oxirgisini o'chir", "ochir", "o'chirish", "delete"]):
+        await cmd_delete_last(message, db)
+        return True
+
+    # 6. Financial Advice
+    if any(k in t for k in ["maslahat", "tavsiya", "maslahat ber", "nima qilay"]):
+        await cmd_advice(message, db, settings)
+        return True
+
+    return False
+
+
     transcript = parsed.get("transcript") or ""
     amount = parsed.get("amount")
 
     if not amount:
+        if transcript and await handle_voice_or_text_command_intent(transcript, message, db, settings):
+            return
+
         tr_msg = f"\n🗣 <i>Eshitildi: \"{transcript}\"</i>" if transcript else ""
         await message.answer(
             f"🎙 Ovozli xabardan summa aniqlanmadi.{tr_msg}\n"
             f"💡 <b>Masalan:</b> <i>\"taksiga 15 ming sarfladim\"</i> deb ayting."
         )
         return
+
 
 
 
@@ -683,11 +726,15 @@ async def on_text(message: Message, db: Database, settings: Settings) -> None:
         # Fallback to local regex parser
         parsed = parse_expense(text)
         if parsed is None:
+            if await handle_voice_or_text_command_intent(text, message, db, settings):
+                return
+
             await message.answer(
                 "Summani aniqlay olmadim. Masalan:\n"
                 "<code>kofega 15000 ketdi</code> yoki <code>+3000000 maosh</code>"
             )
             return
+
         amount = parsed.amount
         category = parsed.category or ("Kirim" if parsed.type == "income" else "Xarajat")
         description = parsed.description or text
