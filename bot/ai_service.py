@@ -1,7 +1,7 @@
 """Gemini AI Service for FinMate Bot.
 
 Handles NLP expense extraction, audio speech-to-text parsing, receipt image OCR,
-and personalized financial advice using Google Gemini API with dynamic model discovery.
+and personalized financial advice using official new google-genai SDK.
 """
 
 from __future__ import annotations
@@ -11,60 +11,39 @@ import logging
 import re
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 log = logging.getLogger(__name__)
 
+MODEL_CANDIDATES = [
+    "gemini-flash-latest",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
 
-def _init_gemini(api_key: str) -> str | None:
-    """Return error string if API key is invalid/missing, else None."""
+
+def _get_client(api_key: str) -> tuple[genai.Client | None, str | None]:
+    """Create official genai.Client or return error code."""
     if not api_key or api_key.strip() == "" or "your_gemini_api_key" in api_key:
-        return "api_key_missing"
+        return None, "api_key_missing"
     try:
-        genai.configure(api_key=api_key)
-        return None
+        client = genai.Client(api_key=api_key)
+        return client, None
     except Exception as e:
-        log.error("Failed to configure Gemini API: %s", e)
-        return str(e)
+        log.error("Failed to create genai.Client: %s", e)
+        return None, str(e)
 
 
-def _get_candidate_models() -> list[str]:
-    """Dynamically discover available generateContent models for current API key."""
-    candidates = []
-    try:
-        for m in genai.list_models():
-            methods = getattr(m, "supported_generation_methods", []) or []
-            if "generateContent" in methods:
-                name = m.name.replace("models/", "")
-                candidates.append(name)
-    except Exception as e:
-        log.warning("Dynamic model listing failed: %s", e)
-
-    # Standard fallback candidates
-    fallbacks = [
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-8b",
-        "gemini-1.5-pro",
-        "gemini-2.0-flash-exp",
-    ]
-    for f in fallbacks:
-        if f not in candidates:
-            candidates.append(f)
-
-    return candidates
-
-
-def _generate_with_fallback(contents: Any) -> Any:
-    """Try dynamically discovered models until one succeeds."""
-    models_to_try = _get_candidate_models()
+def _generate_with_fallback(client: genai.Client, contents: Any) -> Any:
+    """Execute generate_content with model fallback for maximum resilience."""
     last_error = None
-
-    for model_name in models_to_try:
+    for model_name in MODEL_CANDIDATES:
         try:
-            model = genai.GenerativeModel(model_name)
-            res = model.generate_content(contents)
-            return res
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents,
+            )
         except Exception as e:
             err_str = str(e)
             if "404" in err_str or "not found" in err_str:
@@ -84,7 +63,7 @@ def parse_text_with_gemini(
     categories: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Use Gemini API to extract {amount, category, description, type} from text."""
-    err = _init_gemini(api_key)
+    client, err = _get_client(api_key)
     if err:
         return {"error": err}
 
@@ -107,7 +86,7 @@ If no transaction amount can be determined, output null.
 """
 
     try:
-        response = _generate_with_fallback(prompt)
+        response = _generate_with_fallback(client, prompt)
         resp_text = (response.text or "").strip()
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
@@ -139,8 +118,8 @@ def transcribe_and_parse_audio(
     mime_type: str,
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Transcribe voice message and parse transaction info with Gemini."""
-    err = _init_gemini(api_key)
+    """Transcribe voice message and parse transaction info with google-genai SDK."""
+    client, err = _get_client(api_key)
     if err:
         return {"error": err}
 
@@ -166,10 +145,10 @@ Respond STRICTLY in JSON format:
 
     try:
         contents = [
-            {"mime_type": mime_type, "data": audio_bytes},
+            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
             prompt,
         ]
-        response = _generate_with_fallback(contents)
+        response = _generate_with_fallback(client, contents)
         resp_text = (response.text or "").strip()
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
@@ -211,8 +190,8 @@ def ocr_receipt_image(
     mime_type: str = "image/jpeg",
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    """OCR payment receipt photo and extract shop name, amount, category using Gemini Vision."""
-    err = _init_gemini(api_key)
+    """OCR payment receipt photo and extract shop name, amount, category using google-genai SDK."""
+    client, err = _get_client(api_key)
     if err:
         return {"error": err}
 
@@ -234,10 +213,10 @@ If it is not a payment receipt or amount is unreadable, output null.
 
     try:
         contents = [
-            {"mime_type": mime_type, "data": image_bytes},
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
             prompt,
         ]
-        response = _generate_with_fallback(contents)
+        response = _generate_with_fallback(client, contents)
         resp_text = (response.text or "").strip()
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
@@ -269,7 +248,7 @@ def get_financial_advice(
     user_question: str,
 ) -> str:
     """Generate financial advice based on actual user expense/income history context."""
-    err = _init_gemini(api_key)
+    client, err = _get_client(api_key)
     if err == "api_key_missing":
         return "⚠️ Gemini API kaliti sozlanmagan. Serverdagi `.env` faylida `GEMINI_API_KEY`ni to'ldiring."
     elif err:
@@ -287,7 +266,7 @@ Foydalanuvchiga uning real xarajat va daromadlariga asoslangan, amaliy, do'stona
 """
 
     try:
-        response = _generate_with_fallback(prompt)
+        response = _generate_with_fallback(client, prompt)
         return (response.text or "").strip()
     except Exception as e:
         log.warning("Gemini advice request failed: %s", e)
