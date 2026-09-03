@@ -1,7 +1,7 @@
 """Gemini AI Service for FinMate Bot.
 
 Handles NLP expense extraction, audio speech-to-text parsing, receipt image OCR,
-and personalized financial advice using Google Gemini API with model fallback.
+and personalized financial advice using Google Gemini API with dynamic model discovery.
 """
 
 from __future__ import annotations
@@ -14,10 +14,6 @@ from typing import Any
 import google.generativeai as genai
 
 log = logging.getLogger(__name__)
-
-MODEL_CANDIDATES = [
-    "gemini-3.6-flash",
-]
 
 
 def _init_gemini(api_key: str) -> str | None:
@@ -32,10 +28,39 @@ def _init_gemini(api_key: str) -> str | None:
         return str(e)
 
 
+def _get_candidate_models() -> list[str]:
+    """Dynamically discover available generateContent models for current API key."""
+    candidates = []
+    try:
+        for m in genai.list_models():
+            methods = getattr(m, "supported_generation_methods", []) or []
+            if "generateContent" in methods:
+                name = m.name.replace("models/", "")
+                candidates.append(name)
+    except Exception as e:
+        log.warning("Dynamic model listing failed: %s", e)
+
+    # Standard fallback candidates
+    fallbacks = [
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-pro",
+        "gemini-2.0-flash-exp",
+    ]
+    for f in fallbacks:
+        if f not in candidates:
+            candidates.append(f)
+
+    return candidates
+
+
 def _generate_with_fallback(contents: Any) -> Any:
-    """Try available Gemini models until one succeeds without 404."""
+    """Try dynamically discovered models until one succeeds."""
+    models_to_try = _get_candidate_models()
     last_error = None
-    for model_name in MODEL_CANDIDATES:
+
+    for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
             res = model.generate_content(contents)
