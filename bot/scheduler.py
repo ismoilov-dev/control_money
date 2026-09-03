@@ -18,10 +18,12 @@ REMINDER_TEXT = (
 )
 
 
-def setup_scheduler(bot: Bot, db: Database, user_id: int, timezone: str) -> AsyncIOScheduler:
+def setup_scheduler(bot: Bot, db: Database, user_id: int | None, timezone: str) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=timezone)
 
     async def remind() -> None:
+        if user_id is None:
+            return
         try:
             if await db.has_expenses_today(user_id):
                 log.info("Reminder skipped: expenses already logged today")
@@ -31,10 +33,11 @@ def setup_scheduler(bot: Bot, db: Database, user_id: int, timezone: str) -> Asyn
         except Exception:
             log.exception("Failed to send daily reminder")
 
-    scheduler.add_job(
-        remind,
-        CronTrigger(hour=21, minute=0, timezone=timezone),
-        id="daily_expense_reminder",
-        replace_existing=True,
-    )
+    if user_id is not None:
+        scheduler.add_job(
+            remind,
+            CronTrigger(hour=21, minute=0, timezone=timezone),
+            id="daily_expense_reminder",
+            replace_existing=True,
+        )
     return scheduler
