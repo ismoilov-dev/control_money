@@ -465,6 +465,18 @@ async def on_voice(message: Message, db: Database, settings: Settings) -> None:
         await message.answer("🎙 Ovozli xabarni tushunib bo'lmadi. Qayta urinib ko'ring yoki matn ko'rinishida yozing.")
         return
 
+    if parsed.get("error"):
+        err = parsed["error"]
+        if err == "api_key_missing":
+            await message.answer(
+                "⚠️ <b>Gemini API kaliti sozlanmagan!</b>\n"
+                "Serverdagi <code>.env</code> faylida <code>GEMINI_API_KEY=...</code> ni o'rnating.\n"
+                "Kalitni bepul olish: https://aistudio.google.com/app/apikey"
+            )
+        else:
+            await message.answer(f"⚠️ <b>Gemini API xatoligi:</b> <code>{err}</code>")
+        return
+
     transcript = parsed.get("transcript") or ""
     amount = parsed.get("amount")
 
@@ -475,6 +487,7 @@ async def on_voice(message: Message, db: Database, settings: Settings) -> None:
             f"💡 <b>Masalan:</b> <i>\"taksiga 15 ming sarfladim\"</i> deb ayting."
         )
         return
+
 
 
     user_id = message.from_user.id if message.from_user else 0

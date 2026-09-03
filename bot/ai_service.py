@@ -16,15 +16,16 @@ import google.generativeai as genai
 log = logging.getLogger(__name__)
 
 
-def _init_gemini(api_key: str) -> bool:
-    if not api_key:
-        return False
+def _init_gemini(api_key: str) -> str | None:
+    """Return error string if API key is invalid/missing, else None."""
+    if not api_key or api_key.strip() == "" or "your_gemini_api_key" in api_key:
+        return "api_key_missing"
     try:
         genai.configure(api_key=api_key)
-        return True
+        return None
     except Exception as e:
         log.error("Failed to configure Gemini API: %s", e)
-        return False
+        return str(e)
 
 
 def parse_text_with_gemini(
@@ -33,8 +34,9 @@ def parse_text_with_gemini(
     categories: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Use Gemini API to extract {amount, category, description, type} from text."""
-    if not _init_gemini(api_key):
-        return None
+    err = _init_gemini(api_key)
+    if err:
+        return {"error": err}
 
     cat_list = ", ".join(categories) if categories else "Oziq-ovqat, Transport, Kofe/Kafe, Xarid, Kommunal, Ko'ngilochar, Maosh, Boshqa"
 
@@ -58,12 +60,9 @@ If no transaction amount can be determined, output null.
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         resp_text = (response.text or "").strip()
-        
-        # Clean json formatting markdown
         resp_text = re.sub(r"^```json\s*", "", resp_text, flags=re.IGNORECASE)
         resp_text = re.sub(r"^```\s*", "", resp_text)
-        resp_text = re.sub(r"\s*```$", "", resp_text)
-        resp_text = resp_text.strip()
+        resp_text = re.sub(r"\s*```$", "", resp_text).strip()
 
         if not resp_text or resp_text == "null":
             return None
@@ -80,6 +79,7 @@ If no transaction amount can be determined, output null.
                 }
     except Exception as e:
         log.warning("Gemini NLP parsing failed: %s", e)
+        return {"error": str(e)}
 
     return None
 
@@ -89,10 +89,11 @@ def transcribe_and_parse_audio(
     audio_bytes: bytes,
     mime_type: str,
     categories: list[str] | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Transcribe voice message and parse transaction info with Gemini."""
-    if not _init_gemini(api_key):
-        return None
+    err = _init_gemini(api_key)
+    if err:
+        return {"error": err}
 
     cat_list = ", ".join(categories) if categories else "Oziq-ovqat, Transport, Kofe/Kafe, Xarid, Kommunal, Ko'ngilochar, Maosh, Boshqa"
 
@@ -127,25 +128,33 @@ Respond STRICTLY in JSON format:
         resp_text = re.sub(r"\s*```$", "", resp_text).strip()
 
         if not resp_text or resp_text == "null":
-            return None
+            return {}
 
         data = json.loads(resp_text)
         if isinstance(data, dict):
             transcript = str(data.get("transcript") or "").strip()
             raw_amount = data.get("amount")
-            amount = int(raw_amount) if raw_amount and str(raw_amount).isdigit() and int(raw_amount) > 0 else None
+            amount = None
+            if raw_amount:
+                try:
+                    cleaned_amt = re.sub(r"[^\d]", "", str(raw_amount))
+                    if cleaned_amt:
+                        amount = int(cleaned_amt)
+                except Exception:
+                    pass
+
             return {
                 "transcript": transcript,
-                "amount": amount,
+                "amount": amount if (amount and amount > 0) else None,
                 "category": str(data.get("category") or "Boshqa"),
                 "description": str(data.get("description") or transcript),
                 "type": str(data.get("type") or "expense").lower(),
             }
     except Exception as e:
         log.warning("Gemini Audio parsing failed: %s", e)
+        return {"error": str(e)}
 
-    return None
-
+    return {}
 
 
 def ocr_receipt_image(
@@ -153,10 +162,11 @@ def ocr_receipt_image(
     image_bytes: bytes,
     mime_type: str = "image/jpeg",
     categories: list[str] | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """OCR payment receipt photo and extract shop name, amount, category using Gemini Vision."""
-    if not _init_gemini(api_key):
-        return None
+    err = _init_gemini(api_key)
+    if err:
+        return {"error": err}
 
     cat_list = ", ".join(categories) if categories else "Oziq-ovqat, Transport, Kofe/Kafe, Xarid, Kommunal, Ko'ngilochar, Boshqa"
 
@@ -187,7 +197,7 @@ If it is not a payment receipt or amount is unreadable, output null.
         resp_text = re.sub(r"\s*```$", "", resp_text).strip()
 
         if not resp_text or resp_text == "null":
-            return None
+            return {}
 
         data = json.loads(resp_text)
         if isinstance(data, dict) and "amount" in data and data["amount"]:
@@ -201,8 +211,9 @@ If it is not a payment receipt or amount is unreadable, output null.
                 }
     except Exception as e:
         log.warning("Gemini Receipt OCR failed: %s", e)
+        return {"error": str(e)}
 
-    return None
+    return {}
 
 
 def get_financial_advice(
@@ -211,8 +222,11 @@ def get_financial_advice(
     user_question: str,
 ) -> str:
     """Generate financial advice based on actual user expense/income history context."""
-    if not _init_gemini(api_key):
-        return "⚠️ Gemini API kaliti kiritilmagan. Maslahatchi rejimidan foydalanish uchun `.env` faylda `GEMINI_API_KEY`ni sozlang."
+    err = _init_gemini(api_key)
+    if err == "api_key_missing":
+        return "⚠️ Gemini API kaliti sozlanmagan. Serverdagi `.env` faylida `GEMINI_API_KEY`ni to'ldiring."
+    elif err:
+        return f"⚠️ Gemini API sozlashda xatolik: {err}"
 
     prompt = f"""Siz FinMate botining shaxsiy moliya bo'yicha sun'iy intellekt maslahatchisisiz.
 Foydalanuvchining real moliyaviy ma'lumotlari:
