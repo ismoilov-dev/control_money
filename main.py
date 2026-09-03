@@ -48,6 +48,18 @@ async def main() -> None:
         ]
     )
 
+    await bot.set_my_description(
+        "Shaxsiy moliya va haftalik byudjetingizni nazorat qiluvchi qulay bot 💸\n\n"
+        "✨ Xarajat va kirimlaringizni oddiy matn orqali tezkor saqlang:\n"
+        "• -12 taksi (12 000 so'm xarajat)\n"
+        "• +3000000 maosh (3 000 000 so'm kirim)\n\n"
+        "📌 /set_weekly_money 300k orqali haftalik limit o'rnating va real-vaqtda qoldiqni kuzatib boring!"
+    )
+
+    await bot.set_my_short_description(
+        "Haftalik byudjet va xarajatlarni tezkor hisoblash boti 💸"
+    )
+
     scheduler = setup_scheduler(
         bot=bot,
         db=db,
